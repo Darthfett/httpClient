@@ -301,7 +301,7 @@ int main(int argc, char *argv[]) {
 
     read_headers();
 
-    // if (strcmp(response_code, "200") != 0) goto out;
+    if (strcmp(response_code, "200") != 0) goto out;
 
     if (header_err_flag) goto out;
 
