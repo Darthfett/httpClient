@@ -13,8 +13,14 @@
 #define PORT 80
 #define MAX_RETRIES 5
 
+#define TRUE 1
+#define FALSE 0
+
 int sockfd;
 struct sockaddr_in address;
+
+int content_length = -1;
+int header_err_flag = FALSE;
 
 int read_line(int fd, char *buffer, int size) {
     char next = '\0';
@@ -90,12 +96,75 @@ int write_socket(int fd, char *msg, int size) {
     return -1;
 }
 
+void read_headers() {
+    printf("\n--READ HEADERS--\n\n");
+    while(1) {
+        char header[8096];
+        int len;
+        char next;
+        int err;
+        char *header_value_start;
+        len = read_line(sockfd, header, sizeof(header));
+
+        if (len <= 0) {
+            // Error in reading from socket
+            header_err_flag = TRUE;
+            continue;
+        }
+
+        printf("%s", header);
+
+        if (strcmp(header, "\n") == 0) {
+            // Empty line signals end of HTTP Headers
+            return;
+        }
+
+        // If the next line begins with a space or tab, it is a continuation of the previous line.
+        err = recv(sockfd, &next, 1, MSG_PEEK);
+        while (isspace(next) && next != '\n' && next != '\r') {
+            if (err) {
+                printf("header space/tab continuation check err\n");
+                // Not sure what to do in this scenario
+            }
+            // Read the space/tab and get rid of it 
+            read(sockfd, &next, 1);
+            
+            // Concatenate the next line to the current running header line
+            len = len + read_line(sockfd, header + len, sizeof(header) - len);
+            err = recv(sockfd, &next, 1, MSG_PEEK);
+        }
+
+        // Find first occurence of colon, to split by header type and value
+        header_value_start = strchr(header, ':');
+        if (header_value_start == NULL) {
+            // Invalid header, not sure what to do in this scenario
+            printf("invalid header\n");
+            header_err_flag = TRUE;
+            continue;
+        }
+        int header_type_len = header_value_start - header;
+
+        // Increment header value start past colon
+        header_value_start++;
+        // Increment header value start to first non-space character
+        while (isspace(*header_value_start) && (*header_value_start != '\n') && (*header_value_start != '\r')) {
+            header_value_start++;
+        }
+        int header_value_len = len - (header_value_start - header);
+
+        // We only care about Content-Length
+        if (strncasecmp(header, "Content-Length", header_type_len) == 0) {
+            content_length = atoi(header_value_start);
+        }
+    }
+}
+
 void print_usage() {
     printf("Usage: ./httpget http://address/file.extension\n");
 }
 
 char* split_path(char *path, char **file_out) {
-    char *pos = strrchr(path, '/');
+    char *pos = strchr(path, '/');
     if (pos == NULL) {
         char *addr = (char*) malloc(strlen(path) + 1);
         char *file = (char*) malloc(2);
@@ -198,8 +267,71 @@ int main(int argc, char *argv[]) {
 
     // Read first line and print to console
     int len = read_line(sockfd, buffer, sizeof(buffer));
-    fprintf(stderr, "%s\n", buffer);
+    printf("%s\n", buffer);
+    char version[16];
+    char response_code[16];
+    char response_reason[256];
+    int i, j;
 
+    // Read version
+    for(i = 0; i < sizeof(version) - 1 && !isspace(buffer[i]); i++) {
+        version[i] = buffer[i];
+    }
+    version[i] = '\0';
+
+    // Skip over spaces
+    for (; isspace(buffer[i]) && i < sizeof(buffer); i++);
+
+    for (j = 0; i < sizeof(buffer) && j < sizeof(response_code) - 1 && !isspace(buffer[i]); i++, j++) {
+        response_code[j] = buffer[i];
+    }
+    response_code[j] = '\0';
+
+    // Skip over spaces
+    for (; isspace(buffer[i]) && i < sizeof(buffer); i++);
+
+    for (j = 0; i < sizeof(buffer) && j < sizeof(response_reason) - 1 && buffer[i] != '\n'; i++, j++) {
+        response_reason[j] = buffer[i];
+    }
+    response_reason[j] = '\0';
+
+    printf("Version: %s\n", version);
+    printf("Response Code: %s\n", response_code);
+    printf("Response Reason: %s\n", response_reason);
+
+    read_headers();
+
+    // if (strcmp(response_code, "200") != 0) goto out;
+
+    if (header_err_flag) goto out;
+
+    if (content_length <= 0) goto out;
+
+    char *result = (char*) malloc(content_length + 1);
+    len = read_socket(sockfd, result, content_length);
+    if (len <= 0) goto out;
+    result[len] = '\0';
+
+    char *out_file;
+    char *file_start = strrchr(file_name, '/') + 1;
+
+    if (strcmp(file_start, "") == 0) {
+        out_file = "out/index.html";
+    } else {
+        out_file = (char*) malloc(strlen(file_start) + 5);
+        strcpy(out_file, "out/");
+        strcpy(out_file + 4, file_start);
+    }
+
+    printf("%s\n", result); 
+
+    FILE *out = fopen(out_file, "w");
+
+    fprintf(out, "%s", result);
+
+    fclose(out);
+
+out:
     // Close the connection down
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
