@@ -124,24 +124,31 @@ int main(int argc, char *argv[]) {
         print_usage();
         return 1;
     }
-
+    
+    // The host address and file we wish to GET, e.g. http://127.0.0.1/blah.txt
     char *addr_start = argv[1];
 
+    // Skip past http:// if it's there
     if (strncasecmp(addr_start, "http://", strlen("http://")) == 0) {
         addr_start += strlen("http://");
     }
 
+    // Split the host address into a web address and a file name/path, 
+    // e.g. 127.0.0.1/blah.txt into 127.0.0.1 and /blah.txt
     char *file_name;
     char *server_address = split_path(addr_start, &file_name);
 
     printf("Get file %s at server %s\n", file_name, server_address);
 
+    // Open up a socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         printf("Unable to open socket\n"); 
         exit(1);
         return 1;
     }
+
+    // Try to connect to server_address on port PORT
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = inet_addr(server_address);
     address.sin_port = htons(PORT);
@@ -154,6 +161,9 @@ int main(int argc, char *argv[]) {
 
     printf("Connected with host\n");
 
+    /*******************************************************/
+    /*             Begin sending GET request               */
+    /*******************************************************/
     char buffer[8096];
     sprintf(buffer, "GET %s HTTP/1.1\r\n", file_name);
     write_socket(sockfd, buffer, strlen(buffer));
@@ -164,14 +174,19 @@ int main(int argc, char *argv[]) {
     sprintf(buffer, "Connection: close\r\n");
     write_socket(sockfd, buffer, strlen(buffer));
 
+    // Signal end of headers with empty line
     sprintf(buffer, "\r\n");
     write_socket(sockfd, buffer, strlen(buffer));
 
-    int len = read_line(sockfd, buffer, sizeof(buffer));
-    fprintf(stderr, "%s\n", buffer);
+    /*******************************************************/
+    /*             Begin reading response                  */
+    /*******************************************************/
 
+    // Read first line and print to console
+    int len = read_line(sockfd, buffer, sizeof(buffer));
+    printf("%s\n", buffer);
+
+    // Close the connection down
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
-
-
 }
