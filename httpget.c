@@ -96,7 +96,12 @@ void print_usage() {
 char* split_path(char *path, char **file_out) {
     char *pos = strrchr(path, '/');
     if (pos == NULL) {
-        
+        char *addr = (char*) malloc(strlen(path) + 1);
+        char *file = (char*) malloc(2);
+        strncpy(addr, path, strlen(path));
+        strncpy(file, "/", 1);
+        *file_out = file;
+        return addr;
     }
     int len_addr = pos - path;
     int len_file = strlen(path) - (pos - path);
@@ -123,9 +128,7 @@ int main(int argc, char *argv[]) {
     char *addr_start = argv[1];
 
     if (strncasecmp(addr_start, "http://", strlen("http://")) == 0) {
-        fprintf(stderr, "startswith http://\n");
         addr_start += strlen("http://");
-        fprintf(stderr, "%s\n", addr_start);
     }
 
     char *file_name;
@@ -149,12 +152,26 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    printf("Connected with host\n");
+
     char buffer[8096];
     sprintf(buffer, "GET %s HTTP/1.1\r\n", file_name);
     write_socket(sockfd, buffer, strlen(buffer));
+    sprintf(buffer, "Host: %s:%d\r\n", server_address, PORT);
+    write_socket(sockfd, buffer, strlen(buffer));
+    sprintf(buffer, "User-Agent: Test HTTP Client\r\n");
+    write_socket(sockfd, buffer, strlen(buffer));
+    sprintf(buffer, "Connection: close\r\n");
+    write_socket(sockfd, buffer, strlen(buffer));
+
     sprintf(buffer, "\r\n");
     write_socket(sockfd, buffer, strlen(buffer));
 
+    int len = read_line(sockfd, buffer, sizeof(buffer));
+    fprintf(stderr, "%s\n", buffer);
+
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
+
+
 }
