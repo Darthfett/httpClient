@@ -7,9 +7,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <netdb.h>
 
 #define HOST_ADDRESS "127.0.0.1"
-#define PORT 8000
+#define PORT 80
 #define MAX_RETRIES 5
 
 int sockfd;
@@ -118,6 +119,16 @@ char* split_path(char *path, char **file_out) {
     return addr;
 }
 
+int split_port(char *addr) {
+    char *pos = strrchr(addr, ':');
+    if (pos == NULL) {
+        return PORT;
+    }
+    int port = atoi(pos + 1);
+    *pos = '\0';
+    return port;
+}
+
 int main(int argc, char *argv[]) {
     int arg_count = argc - 1;
     if (arg_count < 1 || arg_count > 1) {
@@ -137,8 +148,10 @@ int main(int argc, char *argv[]) {
     // e.g. 127.0.0.1/blah.txt into 127.0.0.1 and /blah.txt
     char *file_name;
     char *server_address = split_path(addr_start, &file_name);
+    int port = split_port(server_address);
+    struct hostent *host_entity = gethostbyname(server_address);
 
-    printf("Get file %s at server %s\n", file_name, server_address);
+    printf("Get file %s at server %s on port %d\n", file_name, server_address, port);
 
     // Open up a socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -150,8 +163,9 @@ int main(int argc, char *argv[]) {
 
     // Try to connect to server_address on port PORT
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(server_address);
-    address.sin_port = htons(PORT);
+    memcpy(&address.sin_addr, host_entity->h_addr_list[0], host_entity->h_length);
+    // address.sin_addr.s_addr = inet_addr(server_address);
+    address.sin_port = htons(port);
 
     if (connect(sockfd, (struct sockaddr*) &address, sizeof(address)) < 0) {
         printf("Unable to connect to host\n");
@@ -167,7 +181,7 @@ int main(int argc, char *argv[]) {
     char buffer[8096];
     sprintf(buffer, "GET %s HTTP/1.1\r\n", file_name);
     write_socket(sockfd, buffer, strlen(buffer));
-    sprintf(buffer, "Host: %s:%d\r\n", server_address, PORT);
+    sprintf(buffer, "Host: %s:%d\r\n", server_address, port);
     write_socket(sockfd, buffer, strlen(buffer));
     sprintf(buffer, "User-Agent: Test HTTP Client\r\n");
     write_socket(sockfd, buffer, strlen(buffer));
@@ -184,9 +198,11 @@ int main(int argc, char *argv[]) {
 
     // Read first line and print to console
     int len = read_line(sockfd, buffer, sizeof(buffer));
-    printf("%s\n", buffer);
+    fprintf(stderr, "%s\n", buffer);
 
     // Close the connection down
     shutdown(sockfd, SHUT_RDWR);
     close(sockfd);
+
+    return 0;
 }
