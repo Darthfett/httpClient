@@ -10,26 +10,83 @@
 
 #define HOST_ADDRESS "127.0.0.1"
 #define PORT 8000
+#define MAX_RETRIES 5
 
 int sockfd;
 struct sockaddr_in address;
 
-int main(int argc, char *argv[]) {
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        printf("Unable to open socket\n"); 
-        exit(1);
-        return 1;
-    }
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(HOST_ADDRESS);
-    address.sin_port = htons(PORT);
+int read_line(int fd, char *buffer, int size) {
+    char next = '\0';
+    char err;
+    int i = 0;
+    while ((i < (size - 1)) && (next != '\n')) {
+        err = read(fd, &next, 1);
 
-    if (connect(sockfd, (struct sockaddr*) &address, sizeof(address)) < 0) {
-        printf("Unable to connect to host\n");
-        exit(1);
-        return 1;
+        if (err <= 0) break;
+
+        if (next == '\r') {
+            err = recv(fd, &next, 1, MSG_PEEK);
+            if (err > 0 && next == '\n') {
+                read(fd, &next, 1);
+            } else {
+                next = '\n';
+            }
+        }
+        buffer[i] = next;
+        i++;
     }
+    buffer[i] = '\0';
+    return i;
+}
+
+int read_socket(int fd, char *buffer, int size) {
+    int bytes_recvd = 0;
+    int retries = 0;
+    int total_recvd = 0;
+
+    while (retries < MAX_RETRIES && size > 0 && strstr(buffer, ">") == NULL) {
+        bytes_recvd = read(fd, buffer, size);
+
+        if (bytes_recvd > 0) {
+            buffer += bytes_recvd;
+            size -= bytes_recvd;
+            total_recvd += bytes_recvd;
+        } else {
+            retries++;
+        }
+    }
+
+    if (bytes_recvd >= 0) {
+        // Last read was not an error, return how many bytes were recvd
+        return total_recvd;
+    }
+    // Last read was an error, return error code
+    return -1;
+}
+
+int write_socket(int fd, char *msg, int size) {
+    int bytes_sent = 0;
+    int retries = 0;
+    int total_sent = 0;
+
+    while (retries < MAX_RETRIES && size > 0) {
+        bytes_sent = write(fd, msg, size);
+
+        if (bytes_sent > 0) {
+            msg += bytes_sent;
+            size -= bytes_sent;
+            total_sent += bytes_sent;
+        } else {
+            retries++;
+        }
+    }
+
+    if (bytes_sent >= 0) {
+        // Last write was not an error, return how many bytes were sent
+        return total_sent;
+    }
+    // Last write was an error, return error code
+    return -1;
 }
 
 void print_usage() {
@@ -42,7 +99,7 @@ char* split_path(char *path, char **file_out) {
         
     }
     int len_addr = pos - path;
-    int len_file = &path[strlen(path)-1] - ++pos;
+    int len_file = strlen(path) - (pos - path);
     
     char *addr = (char*) malloc(len_addr + 1);
     char *file = (char*) malloc(len_file + 1);
@@ -56,7 +113,7 @@ char* split_path(char *path, char **file_out) {
     return addr;
 }
 
-int dontrunme(int argc, char *argv[]) {
+int main(int argc, char *argv[]) {
     int arg_count = argc - 1;
     if (arg_count < 1 || arg_count > 1) {
         print_usage();
@@ -64,14 +121,40 @@ int dontrunme(int argc, char *argv[]) {
     }
 
     char *addr_start = argv[1];
-    if (strncmp(addr_start, "http://", strlen("http://")) == 0) {
+
+    if (strncasecmp(addr_start, "http://", strlen("http://")) == 0) {
+        fprintf(stderr, "startswith http://\n");
         addr_start += strlen("http://");
+        fprintf(stderr, "%s\n", addr_start);
     }
 
     char *file_name;
-    char *server_address = split_path(argv[1], &file_name);
+    char *server_address = split_path(addr_start, &file_name);
 
     printf("Get file %s at server %s\n", file_name, server_address);
 
-    return 0;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        printf("Unable to open socket\n"); 
+        exit(1);
+        return 1;
+    }
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = inet_addr(server_address);
+    address.sin_port = htons(PORT);
+
+    if (connect(sockfd, (struct sockaddr*) &address, sizeof(address)) < 0) {
+        printf("Unable to connect to host\n");
+        exit(1);
+        return 1;
+    }
+
+    char buffer[8096];
+    sprintf(buffer, "GET %s HTTP/1.1\r\n", file_name);
+    write_socket(sockfd, buffer, strlen(buffer));
+    sprintf(buffer, "\r\n");
+    write_socket(sockfd, buffer, strlen(buffer));
+
+    shutdown(sockfd, SHUT_RDWR);
+    close(sockfd);
 }
