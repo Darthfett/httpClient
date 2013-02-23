@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -20,6 +21,7 @@ int sockfd;
 struct sockaddr_in address;
 
 int content_length = -1;
+char location[1024];
 int header_err_flag = FALSE;
 
 int read_line(int fd, char *buffer, int size) {
@@ -97,7 +99,7 @@ int write_socket(int fd, char *msg, int size) {
 }
 
 void read_headers() {
-    printf("\n--READ HEADERS--\n\n");
+    // printf("\n--READ HEADERS--\n\n");
     while(1) {
         char header[8096];
         int len;
@@ -112,7 +114,7 @@ void read_headers() {
             continue;
         }
 
-        printf("%s", header);
+        // printf("%s", header);
 
         if (strcmp(header, "\n") == 0) {
             // Empty line signals end of HTTP Headers
@@ -155,6 +157,8 @@ void read_headers() {
         // We only care about Content-Length
         if (strncasecmp(header, "Content-Length", header_type_len) == 0) {
             content_length = atoi(header_value_start);
+        } else if (strncasecmp(header, "Location", header_type_len) == 0) {
+            strncpy(location, header_value_start, header_value_len);
         }
     }
 }
@@ -204,6 +208,8 @@ int main(int argc, char *argv[]) {
         print_usage();
         return 1;
     }
+
+    strcpy(location, "\0");
     
     // The host address and file we wish to GET, e.g. http://127.0.0.1/blah.txt
     char *addr_start = argv[1];
@@ -267,7 +273,21 @@ int main(int argc, char *argv[]) {
 
     // Read first line and print to console
     int len = read_line(sockfd, buffer, sizeof(buffer));
-    printf("%s\n", buffer);
+
+    if (len <= 0) {
+        printf("No response received from server\n");
+        goto out;
+    } else {
+        char time_buffer[512];
+        time_t raw_time;
+        struct tm *current_time;
+        time(&raw_time);
+        current_time = localtime(&raw_time);
+        strftime(time_buffer, 512, "%a, %d %b %Y %T %Z", current_time);
+        printf("[%s] Response received from server\n", time_buffer);
+    }
+
+    // printf("%s\n", buffer);
     char version[16];
     char response_code[16];
     char response_reason[256];
@@ -282,6 +302,7 @@ int main(int argc, char *argv[]) {
     // Skip over spaces
     for (; isspace(buffer[i]) && i < sizeof(buffer); i++);
 
+    // Read response code
     for (j = 0; i < sizeof(buffer) && j < sizeof(response_code) - 1 && !isspace(buffer[i]); i++, j++) {
         response_code[j] = buffer[i];
     }
@@ -290,22 +311,36 @@ int main(int argc, char *argv[]) {
     // Skip over spaces
     for (; isspace(buffer[i]) && i < sizeof(buffer); i++);
 
+    // Read response reason
     for (j = 0; i < sizeof(buffer) && j < sizeof(response_reason) - 1 && buffer[i] != '\n'; i++, j++) {
         response_reason[j] = buffer[i];
     }
     response_reason[j] = '\0';
 
-    printf("Version: %s\n", version);
-    printf("Response Code: %s\n", response_code);
-    printf("Response Reason: %s\n", response_reason);
+    // printf("Version: %s\n", version);
+    // printf("Response Code: %s\n", response_code);
+    // printf("Response Reason: %s\n", response_reason);
 
     read_headers();
 
-    if (strcmp(response_code, "200") != 0) goto out;
+    if (strcmp(response_code, "200") != 0) {
+        if (strcmp(response_code, "301") == 0) {
+            printf("%s Error: %s to %s\n", response_code, response_reason, location);
+        } else {
+            printf("%s Error: %s\n", response_code, response_reason);
+        }
+        goto out;
+    }
 
-    if (header_err_flag) goto out;
+    if (header_err_flag) {
+        printf("Error reading headers\n");
+        goto out;
+    }
 
-    if (content_length <= 0) goto out;
+    if (content_length <= 0) {
+        printf("No content received from server\n"); 
+        goto out;
+    }
 
     char *result = (char*) malloc(content_length + 1);
     len = read_socket(sockfd, result, content_length);
@@ -323,13 +358,19 @@ int main(int argc, char *argv[]) {
         strcpy(out_file + 4, file_start);
     }
 
-    printf("%s\n", result); 
+    // printf("%s\n", result); 
 
     FILE *out = fopen(out_file, "w");
+    if (out == NULL) {
+        printf("Unable to open file %s\n", out_file);
+        goto out;
+    }
 
     fprintf(out, "%s", result);
 
     fclose(out);
+
+    printf("Result saved in %s\n", out_file);
 
 out:
     // Close the connection down
